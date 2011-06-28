@@ -21,82 +21,95 @@
  * @license  http://opensource.org/licenses/gpl-license.php GNU Public License
  * @link     https://github.com/tadl
  */
-class OpensrfClientRequest
+class OpensrfClient
 {
     public $endpoint; // XXX: where's a good place to "default" this?
     private $_curl;
-    private $_state; // not requested, error, success?
-    private $_service;
-    private $_method;
-    private $_params;
-    private $_success;
 
     /**
      * Constructor
      *
      * @param string $endpoint URL to gateway
-     * @param string $service  OpenSRF service name
-     * @param string $method   OpenSRF method name
-     * @param array  $params   Array of parameters
      *
      * @return OpensrfClientRequest
      */
-    function __construct( $endpoint, $service, $method, $params = array() )
+    function __construct( $endpoint )
     {
         $this->endpoint = $endpoint;
-        $this->_service  = $service;
-        $this->_method   = $method;
-        $this->_params   = $params;
         $this->_curl     = curl_init();
         curl_setopt($this->_curl, CURLOPT_SSL_VERIFYHOST, 2);
         curl_setopt($this->_curl, CURLOPT_SSL_VERIFYPEER, true);
         //curl_setopt($this->_curl, CURLOPT_CAPATH, '/etc/ssl/certs');
         //curl_setopt($this->_curl, CURLOPT_CAINFO, 'thawte.pem');
-    } 
-
-    /**
-     * Execute
-     *
-     * @return object|false Request result or false
-     */
-    function execute( )
-    {
         curl_setopt($this->_curl, CURLOPT_URL, $this->endpoint);
         curl_setopt($this->_curl, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($this->_curl, CURLOPT_POST, true);
-        curl_setopt($this->_curl, CURLOPT_POSTFIELDS, $this->_buildPost($params));
+    } 
+
+    /**
+     * Request
+     *
+     * Make a request using this client object
+     *
+     * @param string $service  OpenSRF service name
+     * @param string $method   OpenSRF method name
+     * @param array  $params   Array of parameters
+     *
+     * @return object|false Request result or false
+     */
+    function request( $service, $method, $params = array() )
+    {
+        curl_setopt($this->_curl, CURLOPT_POSTFIELDS, $this->_buildPost($service, $method, $params));
+
+        $response = new OpensrfResponse();
 
         $result_raw = curl_exec($this->_curl);
 
         // check for curl-level errors
         if ($result_raw === false) {
+            $response->success = false;
             $curl_error = curl_error($this->_curl);
-            $this->success = false;
-            $this->error = $curl_error;
-            return false;
+            $response->debug = "curl error: " . $curl_error;
+            return $response;
         }
 
-        $result = json_decode($result_raw); // XXX: what about json decode failures?
+        // record HTTP status code and check for errors
+        $http_status = curl_getinfo($this->_curl, CURLINFO_HTTP_CODE);
+        $response->http_status = $http_status;
+        if ($http_status <> '200') {
+            $response->success = false;
+            $response->debug = "HTTP status: " . $http_status;
+            return $response;
+        }
+
+        $response->raw = $result_raw;
+        $result_decoded = json_decode($result_raw); // XXX: what about json decode failures?
+        if ($result_decoded) {
+            $response->status  = $result_decoded->status;
+            $response->payload = $result_decoded->payload;
+            $response->debug   = $result_decoded->debug;
+        } else {
+            die("JSON decode failure.");
+        }
 
         // Check OpenSRF request status
-        if ($result->status == 200) {
-            $this->success = true;
+        if ($response->status == 200) {
+            $response->success = true;
         } else {
-            $this->success = false;
-            $this->error = $result->debug;
+            $response->success = false;
         }
 
-        return $result;
+        return $response;
     }
 
     /**
-     * _buildPOST
+     * _buildPost
      *
      * @param array $params Parameters for OpenSRF request
      *
      * @return string URL-encoded query string
      */
-    private function _buildPOST($params)
+    private function _buildPost($service, $method, $params)
     {
         /* gateway requests should be application/x-www-form-urlencoded
            which in php curl land means we use http_build_query and
@@ -106,8 +119,8 @@ class OpensrfClientRequest
         */
 
         $post_data = array(
-        'service' => $this->_service,
-        'method' => $this->_method,
+        'service' => $service,
+        'method' => $method,
         );
 
         // XXX: we are not making use of $params at all at this point
@@ -122,22 +135,20 @@ class OpensrfClientRequest
         return(http_build_query($post_data));
     }
 
-    /**
-     * Success
-     *
-     * @return boolean Success or not?
-     */
-    function success()
-    {
-        return $this->success;
-    }
+}
 
-    // build and make a request
-    // check for success
-    // give it a gather() method?
-    // (what did gather() do again?)
-    // ability to display errors 
-
+/**
+ *  Opensrf response class
+ *
+ */
+class OpensrfResponse
+{
+    public $success = false;
+    public $http_status;
+    public $raw;
+    public $status;
+    public $payload;
+    public $debug;
 }
 
 // vim: expandtab softtabstop=4 tabstop=4 shiftwidth=4
